@@ -1,0 +1,25 @@
+{
+  "name": "Festival de Sitges 2025",
+  "short_name": "Sitges 2025",
+  "description": "Agenda del Festival de Sitges 2025",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#000000",
+  "theme_color": "#FF0042",
+  "orientation": "portrait",
+  "icons": [
+    {
+      "src": "Sitges_Film_Festival.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "Sitges_Film_Festival.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}
