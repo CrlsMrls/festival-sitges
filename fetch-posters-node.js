@@ -4,7 +4,7 @@ const fs = require('fs');
 const path = require('path');
 
 // Configuration - change this to the year you want to process
-const YEAR = '2025';
+const YEAR = '2026';
 const MOVIES_FILE = path.join(__dirname, YEAR, 'movies.json');
 
 // Load sessions from JSON file

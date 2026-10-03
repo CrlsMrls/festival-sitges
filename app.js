@@ -1,113 +1,330 @@
 // Movie sessions data - imported from year-specific folder
 let sessions = [];
 
+// Years with a movies.json available, newest first. Add a new entry here
+// each time a new year's folder gets added to the repo (see README).
+const AVAILABLE_YEARS = [
+  { year: '2026', label: '2026' },
+  { year: '2025', label: '2025' },
+];
+let currentYear = AVAILABLE_YEARS[0].year;
+
+// ---------------------------------------------------------------------
+// Diagnostic log, permanent. There's no way to see console.log on a phone
+// without plugging it into a computer, so when something actually goes
+// wrong loading the sessions (network failure, timeout, empty data), a
+// small panel surfaces the trail of what happened directly on screen.
+// On a normal successful load it stays completely invisible — only the
+// failure path ever calls showDiagnostics().
+// ---------------------------------------------------------------------
+const debugLog = [];
+function debug(label, data) {
+  const line = `[${new Date().toTimeString().slice(0, 8)}] ${label}` + (data !== undefined ? ': ' + JSON.stringify(data) : '');
+  debugLog.push(line);
+  console.log(line);
+}
+function showDiagnostics(reason) {
+  let el = document.getElementById('debug-panel');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'debug-panel';
+    el.style.cssText = 'position:fixed;bottom:0;left:0;right:0;max-height:35vh;overflow-y:auto;background:rgba(20,0,0,0.97);color:#ff6b6b;font:10px monospace;padding:10px;z-index:99999;border-top:2px solid #FF0042;white-space:pre-wrap;';
+    el.onclick = () => { el.style.maxHeight = el.style.maxHeight === '35vh' ? '90vh' : '35vh'; };
+    document.body.appendChild(el);
+  }
+  el.textContent = `⚠️ No se pudo cargar la lista (${reason}). Detalle (toca para ver más):\n` + debugLog.join('\n');
+}
+
 // Load sessions from JSON file
-async function loadSessions() {
+//
+// This does NOT rely solely on the Service Worker's cache. iOS Safari has
+// known reliability issues with Service Workers for home-screen-installed
+// apps (they don't always stay active/controlling across relaunches), so a
+// Cache-API-only fallback can silently fail offline even though everything
+// else (HTML/CSS, which the OS caches separately) still loads fine — exactly
+// the symptom reported. localStorage is a much more dependable offline store
+// on iOS, so it's used here as an independent second safety net: every
+// successful online load refreshes it, and any failed fetch (no connection,
+// or the Service Worker not kicking in) falls back to it instead of to an
+// empty list.
+async function loadSessions(year) {
+  year = year || currentYear;
+  const storageKey = `cachedSessions_${year}`;
+  debug('loadSessions: start', { year });
   try {
-    const response = await fetch('./2025/movies.json');
+    // fetch() doesn't always fail fast when there's no connectivity — on
+    // some networks/devices it just hangs waiting for a connection instead
+    // of rejecting immediately. Without a timeout, that hang would block
+    // init() forever and the localStorage fallback below would never get a
+    // chance to run. 4s is generous for a same-origin JSON file when there
+    // IS a connection, and short enough to not feel broken when there isn't.
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 4000);
+    const t0 = Date.now();
+    const response = await fetch(`./${year}/movies.json`, { signal: controller.signal });
+    clearTimeout(timeoutId);
+    debug('fetch responded', { ms: Date.now() - t0, status: response.status, ok: response.ok });
+    if (!response.ok) throw new Error('HTTP ' + response.status);
     sessions = await response.json();
+    sessions.sort(sortByStart);
+    debug('fetch parsed OK', { count: sessions.length });
+    try {
+      localStorage.setItem(storageKey, JSON.stringify(sessions));
+      debug('saved to localStorage', { count: sessions.length });
+    } catch (storageErr) {
+      debug('localStorage SAVE failed', String(storageErr));
+    }
     return sessions;
   } catch (error) {
-    console.error('Error loading sessions:', error);
-    return [];
+    debug('fetch FAILED', { name: error.name, message: error.message });
+    try {
+      const cached = localStorage.getItem(storageKey);
+      debug('localStorage read', { hasData: !!cached, rawLength: cached ? cached.length : 0 });
+      if (cached) {
+        sessions = JSON.parse(cached);
+        sessions.sort(sortByStart);
+        debug('using localStorage fallback', { count: sessions.length });
+        return sessions;
+      }
+    } catch (fallbackErr) {
+      debug('localStorage fallback FAILED', String(fallbackErr));
+    }
+    sessions = [];
+    debug('no data available anywhere, sessions = []');
+    // Only surface the panel when we truly have nothing to show — a
+    // successful localStorage fallback is the app working as designed and
+    // shouldn't alarm anyone, this is the genuine failure case.
+    showDiagnostics('sin datos de red ni de localStorage');
+    return sessions;
   }
+}
+
+// --- Real-time "now / next" helpers ---------------------------------------
+//
+// Older years (e.g. 2025) were saved without an ISO `date` field, only a
+// display label like "Mar 14" — there's no way to build a real Date from
+// that, and there's no need to: a past festival has nothing "live" or
+// "next" anyway. getSessionStart returns null for those, and every function
+// below treats null as "not a real, comparable time" instead of crashing.
+
+// Build a real Date object from a session's date + start time, or null if
+// this session doesn't have enough info to compute one (older years).
+function getSessionStart(session) {
+  if (!session.date) return null;
+  const d = new Date(`${session.date}T${session.start}:00`);
+  return isNaN(d) ? null : d;
+}
+
+// Session end = start + real session duration (handles midnight rollover)
+function getSessionEnd(session) {
+  const start = getSessionStart(session);
+  return start ? new Date(start.getTime() + session.sitgesDuration * 60000) : null;
+}
+
+// Stable sort comparator: sessions without a real date keep their original
+// (already sensible, hand-curated) order instead of getting shuffled.
+function sortByStart(a, b) {
+  const sa = getSessionStart(a);
+  const sb = getSessionStart(b);
+  if (!sa || !sb) return 0;
+  return sa - sb;
+}
+
+// One of: 'live' (happening right now), 'next' (closest upcoming), 'past', 'upcoming'
+function getSessionStatus(session, now, nextId) {
+  const start = getSessionStart(session);
+  if (!start) return 'upcoming';
+  const end = getSessionEnd(session);
+  if (now >= start && now < end) return 'live';
+  if (session.id === nextId) return 'next';
+  if (now >= end) return 'past';
+  return 'upcoming';
+}
+
+// Find the id of the closest session that hasn't started yet
+function findNextSessionId(now) {
+  let best = null;
+  for (const s of sessions) {
+    const start = getSessionStart(s);
+    if (start && start > now && (!best || start < getSessionStart(best))) {
+      best = s;
+    }
+  }
+  return best ? best.id : null;
 }
 
 // State management
 let expandedIds = [];
+let collapsedDays = [];
 let posterCache = {};
-let selectedDay = 'all';
-let showFilters = false;
+let liveInterval = null;
 
 // Initialize app
 async function init() {
   // Load sessions from JSON file
-  await loadSessions();
-  
+  await loadSessions(currentYear);
+  afterSessionsLoaded();
+
+  renderYearSwitcher();
+
+  // Scroll straight to the live/next session so it's the first thing you see
+  scrollToCurrentSession();
+
+  // Keep the "ahora / siguiente" banner and card highlighting live while the
+  // app stays open during the festival, without re-rendering everything.
+  liveInterval = setInterval(updateNowNext, 30000);
+}
+
+// Every day collapsed except the one with the live/next session (if any —
+// an archive year with nothing live or upcoming just collapses everything).
+function defaultCollapsedDays() {
+  const now = new Date();
+  const nextId = findNextSessionId(now);
+  const highlighted = sessions.find(s => {
+    const status = getSessionStatus(s, now, nextId);
+    return status === 'live' || status === 'next';
+  });
+  const allDays = [...new Set(sessions.map(s => s.day))];
+  return allDays.filter(day => !highlighted || day !== highlighted.day);
+}
+
+// Everything that needs to happen after `sessions` has new data, whether
+// from the initial load or from switching years.
+function afterSessionsLoaded() {
   // Load saved state from localStorage
   const savedExpanded = localStorage.getItem('expandedMovies');
-  if (savedExpanded) {
-    expandedIds = JSON.parse(savedExpanded);
-  }
-  
+  expandedIds = savedExpanded ? JSON.parse(savedExpanded) : [];
+
+  // Collapsed-days state is per year, since which days exist (and what they
+  // mean) differs between editions. The very first time (nothing saved yet)
+  // everything starts collapsed, except whichever day holds the live/next
+  // session — otherwise the "siguiente" banner and the auto-scroll-to-it on
+  // load would be pointing at a day that's hidden by default.
+  const savedCollapsed = localStorage.getItem(`collapsedDays_${currentYear}`);
+  collapsedDays = savedCollapsed ? JSON.parse(savedCollapsed) : defaultCollapsedDays();
+
   // Initialize posterCache from posterURL in sessions data
+  posterCache = {};
   sessions.forEach(session => {
-    if (session.posterURL && !posterCache[session.id]) {
+    if (session.posterURL) {
       posterCache[session.id] = session.posterURL;
     }
   });
-  
-  // Load saved day filter
-  const savedDay = localStorage.getItem('selectedDay');
-  if (savedDay) {
-    selectedDay = savedDay;
-  }
-  
-  // Setup event listeners
-  setupEventListeners();
-  
-  // Populate filters
-  populateFilters();
-  
-  // Restore filter selection
-  const dayFilter = document.getElementById('day-filter');
-  if (dayFilter) {
-    dayFilter.value = selectedDay;
-  }
-  
-  // Render sessions
+
   renderSessions();
 }
 
-// Setup event listeners
-function setupEventListeners() {
-  const filterToggle = document.getElementById('filter-toggle');
-  const dayFilter = document.getElementById('day-filter');
-  
-  filterToggle.addEventListener('click', toggleFilters);
-  dayFilter.addEventListener('change', (e) => {
-    selectedDay = e.target.value;
-    localStorage.setItem('selectedDay', selectedDay);
-    renderSessions();
-  });
+// Switch to a different year's programme (triggered from the year dropdown)
+async function switchYear(year) {
+  if (year === currentYear) return;
+  currentYear = year;
+  document.getElementById('header-year').textContent = year;
+  document.title = `Festival de Sitges ${year}`;
+  document.getElementById('sessions-container').innerHTML =
+    '<div class="flex flex-col items-center justify-center gap-4 py-20 text-gray-400"><div class="spinner"></div><p class="text-sm">Cargando programación…</p></div>';
+  await loadSessions(year);
+  afterSessionsLoaded();
+  scrollToCurrentSession();
 }
 
-// Toggle filters visibility
-function toggleFilters() {
-  showFilters = !showFilters;
-  const filtersDiv = document.getElementById('filters');
-  const arrow = document.getElementById('filter-arrow');
-  
-  if (showFilters) {
-    filtersDiv.classList.remove('hidden');
-    filtersDiv.classList.add('filter-enter');
-    arrow.textContent = '▲';
-  } else {
-    filtersDiv.classList.add('hidden');
-    filtersDiv.classList.remove('filter-enter');
-    arrow.textContent = '▼';
+// Small dropdown, placed at the very bottom of the page, to browse other
+// years' programmes. Only rendered once; later years are just options.
+function renderYearSwitcher() {
+  const el = document.getElementById('year-switcher');
+  if (!el || el.dataset.rendered) return;
+  el.dataset.rendered = '1';
+  const select = document.createElement('select');
+  select.id = 'year-select';
+  select.className = 'bg-gray-900 border-2 border-sitges-red/50 rounded-lg px-4 py-2 text-sm font-medium text-white focus:outline-none focus:ring-2 focus:ring-sitges-red';
+  AVAILABLE_YEARS.forEach(({ year, label }) => {
+    const opt = document.createElement('option');
+    opt.value = year;
+    opt.textContent = label;
+    if (year === currentYear) opt.selected = true;
+    select.appendChild(opt);
+  });
+  select.addEventListener('change', (e) => switchYear(e.target.value));
+  el.innerHTML = '<label class="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-2 text-center">Ver otra edición</label>';
+  el.appendChild(select);
+}
+
+// Scroll the live or next session card into view (once, on load)
+function scrollToCurrentSession() {
+  const now = new Date();
+  const nextId = findNextSessionId(now);
+  const targetId = sessions.find(s => getSessionStatus(s, now, nextId) === 'live')?.id || nextId;
+  if (!targetId) return;
+  const card = document.querySelector(`.movie-card[data-session-id="${targetId}"]`);
+  if (card) {
+    setTimeout(() => card.scrollIntoView({ behavior: 'smooth', block: 'center' }), 300);
   }
 }
 
-// Populate filter options
-function populateFilters() {
-  const days = [...new Set(sessions.map(s => s.day))];
-  
-  const dayFilter = document.getElementById('day-filter');
-  
-  days.forEach(day => {
-    const option = document.createElement('option');
-    option.value = day;
-    option.textContent = day;
-    dayFilter.appendChild(option);
+// Refresh only the "ahora / siguiente" banner and status badges, cheaply,
+// without losing scroll position or expanded/collapsed state.
+function updateNowNext() {
+  renderNowNextBanner();
+  const now = new Date();
+  const nextId = findNextSessionId(now);
+  document.querySelectorAll('.movie-card').forEach(card => {
+    const session = sessions.find(s => s.id === card.dataset.sessionId);
+    if (!session) return;
+    const status = getSessionStatus(session, now, nextId);
+    card.dataset.status = status;
+    const badge = card.querySelector('.status-badge');
+    if (badge) {
+      if (status === 'live') {
+        badge.textContent = '▶ AHORA';
+        badge.className = 'status-badge inline-block text-xs font-black px-2 py-0.5 rounded-full bg-green-500 text-black animate-pulse';
+      } else if (status === 'next') {
+        badge.textContent = '⏭ SIGUIENTE';
+        badge.className = 'status-badge inline-block text-xs font-black px-2 py-0.5 rounded-full bg-yellow-400 text-black';
+      } else {
+        badge.remove();
+      }
+    }
+    card.classList.toggle('opacity-50', status === 'past');
   });
 }
 
-// Filter sessions
-function getFilteredSessions() {
-  return sessions.filter(s => 
-    (selectedDay === 'all' || s.day === selectedDay)
-  );
+// Sticky banner at the top telling you exactly what's on now and what's next
+function renderNowNextBanner() {
+  const el = document.getElementById('now-next-banner');
+  if (!el) return;
+  const now = new Date();
+  const live = sessions.find(s => getSessionStart(s) && now >= getSessionStart(s) && now < getSessionEnd(s));
+  const nextId = findNextSessionId(now);
+  const next = sessions.find(s => s.id === nextId);
+
+  if (!live && !next) {
+    el.classList.add('hidden');
+    return;
+  }
+  el.classList.remove('hidden');
+
+  const parts = [];
+  if (live) {
+    const end = getSessionEnd(live);
+    parts.push(`<button onclick="scrollToSession('${live.id}')" class="flex-1 text-left">
+      <span class="text-[10px] font-black text-green-400 uppercase tracking-wider">▶ Ahora en ${live.sala}</span>
+      <div class="font-bold text-white leading-tight">${live.title}</div>
+      <span class="text-xs text-gray-400">hasta las ${end.toTimeString().slice(0,5)}</span>
+    </button>`);
+  }
+  if (next) {
+    parts.push(`<button onclick="scrollToSession('${next.id}')" class="flex-1 text-left ${live ? 'border-l border-sitges-red/30 pl-3' : ''}">
+      <span class="text-[10px] font-black text-yellow-400 uppercase tracking-wider">⏭ Siguiente</span>
+      <div class="font-bold text-white leading-tight">${next.title}</div>
+      <span class="text-xs text-gray-400">${next.start} · ${next.sala}</span>
+    </button>`);
+  }
+  el.innerHTML = `<div class="flex gap-3">${parts.join('')}</div>`;
+}
+
+// Scroll to any session card by id (used by the banner buttons)
+function scrollToSession(id) {
+  const card = document.querySelector(`.movie-card[data-session-id="${id}"]`);
+  if (card) card.scrollIntoView({ behavior: 'smooth', block: 'center' });
 }
 
 // Group sessions by day
@@ -151,26 +368,52 @@ function toggleExpand(id) {
   }
 }
 
+// Toggle a whole day's session list open/closed, mirroring how individual
+// movie cards expand/collapse.
+function toggleDayCollapse(day) {
+  const index = collapsedDays.indexOf(day);
+  const nowCollapsed = index === -1;
+  if (nowCollapsed) {
+    collapsedDays.push(day);
+  } else {
+    collapsedDays.splice(index, 1);
+  }
+  localStorage.setItem(`collapsedDays_${currentYear}`, JSON.stringify(collapsedDays));
+
+  const sessionsContainer = document.querySelector(`[data-day="${CSS.escape(day)}"]`);
+  if (!sessionsContainer) return;
+  sessionsContainer.classList.toggle('hidden', nowCollapsed);
+
+  const chevron = sessionsContainer.previousElementSibling?.querySelector('polyline');
+  if (chevron) {
+    chevron.setAttribute('points', nowCollapsed ? '6 9 12 15 18 9' : '18 15 12 9 6 15');
+  }
+}
+
 // Render sessions
 function renderSessions() {
   const container = document.getElementById('sessions-container');
-  const filteredSessions = getFilteredSessions();
-  const groupedByDay = groupSessionsByDay(filteredSessions);
-  
+  const groupedByDay = groupSessionsByDay(sessions);
+
+  renderNowNextBanner();
+
   // Update movie count
   const movieCount = document.getElementById('movie-count');
-  movieCount.textContent = `${filteredSessions.length} película${filteredSessions.length !== 1 ? 's' : ''}`;
-  
+  movieCount.textContent = `${sessions.length} película${sessions.length !== 1 ? 's' : ''}`;
+
   // Clear container
   container.innerHTML = '';
   
   // Render each day
   Object.entries(groupedByDay).forEach(([day, daySessions]) => {
+    const isCollapsed = collapsedDays.includes(day);
+
     const daySection = document.createElement('div');
     daySection.className = 'space-y-4';
-    
+
     const dayHeader = document.createElement('div');
-    dayHeader.className = 'flex items-center gap-3 mb-4 pb-3 border-b-2 border-sitges-pink/50';
+    dayHeader.className = 'flex items-center gap-3 mb-4 pb-3 border-b-2 border-sitges-pink/50 cursor-pointer select-none';
+    dayHeader.onclick = () => toggleDayCollapse(day);
     dayHeader.innerHTML = `
       <div class="flex items-center justify-center w-10 h-10 bg-gradient-to-br from-sitges-red to-sitges-pink rounded-lg shadow-lg">
         <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-white">
@@ -184,17 +427,23 @@ function renderSessions() {
         <h2 class="text-2xl font-bold gradient-text">${day}</h2>
       </div>
       <span class="px-3 py-1 bg-sitges-red/20 text-sitges-red text-sm font-bold rounded-full border border-sitges-red/50">${daySessions.length} ${daySessions.length === 1 ? 'película' : 'películas'}</span>
+      <div class="flex-shrink-0 w-8 h-8 flex items-center justify-center rounded-full bg-sitges-red/30">
+        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" class="text-white">
+          <polyline points="${isCollapsed ? '6 9 12 15 18 9' : '18 15 12 9 6 15'}"></polyline>
+        </svg>
+      </div>
     `;
     daySection.appendChild(dayHeader);
-    
+
     const sessionsContainer = document.createElement('div');
-    sessionsContainer.className = 'space-y-3';
-    
+    sessionsContainer.className = 'space-y-3' + (isCollapsed ? ' hidden' : '');
+    sessionsContainer.dataset.day = day;
+
     daySessions.forEach(session => {
       const sessionCard = createSessionCard(session);
       sessionsContainer.appendChild(sessionCard);
     });
-    
+
     daySection.appendChild(sessionsContainer);
     container.appendChild(daySection);
   });
@@ -204,21 +453,30 @@ function renderSessions() {
 function createSessionCard(session) {
   const isExpanded = expandedIds.includes(session.id);
   const endTime = calculateEndTime(session.start, session.sitgesDuration);
-  
+  const now = new Date();
+  const status = getSessionStatus(session, now, findNextSessionId(now));
+
   const card = document.createElement('div');
-  card.className = `movie-card bg-gradient-to-br from-gray-900/90 to-gray-900/70 backdrop-blur rounded-xl overflow-hidden border border-sitges-red/30 shadow-lg transition-all ${isExpanded ? 'expanded' : ''}`;
+  card.className = `movie-card bg-gradient-to-br from-gray-900/90 to-gray-900/70 backdrop-blur rounded-xl overflow-hidden border shadow-lg transition-all ${isExpanded ? 'expanded' : ''} ${status === 'live' ? 'border-green-400 ring-2 ring-green-400/50' : status === 'next' ? 'border-yellow-400 ring-2 ring-yellow-400/40' : 'border-sitges-red/30'} ${status === 'past' ? 'opacity-50' : ''}`;
   card.dataset.sessionId = session.id;
-  
+  card.dataset.status = status;
+
+  const statusBadge = status === 'live'
+    ? '<span class="status-badge inline-block text-xs font-black px-2 py-0.5 rounded-full bg-green-500 text-black animate-pulse mb-2">▶ AHORA</span>'
+    : status === 'next'
+    ? '<span class="status-badge inline-block text-xs font-black px-2 py-0.5 rounded-full bg-yellow-400 text-black mb-2">⏭ SIGUIENTE</span>'
+    : '';
+
   // Card header
   const header = document.createElement('div');
   header.className = 'p-4 cursor-pointer';
   header.onclick = () => toggleExpand(session.id);
-  
+
   header.innerHTML = `
     <div class="flex gap-4">
       <!-- Poster -->
       <div class="flex-shrink-0 w-20 h-28 bg-gradient-to-br from-gray-800 to-gray-900 rounded-lg overflow-hidden border border-sitges-red/30 shadow-md">
-        ${posterCache[session.id] ? 
+        ${posterCache[session.id] ?
           `<img src="${posterCache[session.id]}" alt="${session.title}" class="poster-img w-full h-full object-cover" loading="lazy" />` :
           `<div class="w-full h-full flex items-center justify-center text-4xl">🎬</div>`
         }
@@ -226,6 +484,7 @@ function createSessionCard(session) {
       
       <!-- Info -->
       <div class="flex-1 min-w-0">
+        ${statusBadge ? `<div>${statusBadge}</div>` : ''}
         <div class="flex items-start justify-between gap-2 mb-2">
           <h3 class="font-bold text-lg leading-tight line-clamp-2 text-white">
             ${session.title}
@@ -371,6 +630,7 @@ function createSessionCard(session) {
           </svg>
           Sitges
         </a>
+        ${session.imdbURL ? `
         <a
           href="${session.imdbURL}"
           target="_blank"
@@ -384,6 +644,11 @@ function createSessionCard(session) {
           </svg>
           IMDb
         </a>
+        ` : `
+        <div class="flex-1 flex items-center justify-center gap-2 px-4 py-3 bg-gray-800 text-gray-500 font-semibold rounded-lg border border-gray-700">
+          Sin ficha en IMDb
+        </div>
+        `}
       </div>
     `;
     
@@ -467,18 +732,15 @@ window.addEventListener('appinstalled', () => {
   deferredPrompt = null;
 });
 
-// Check if already installed and update button
+// Check if already installed — if so, there's nothing useful the button can
+// offer, so just hide it instead of showing a disabled "✓ Ya instalada".
 window.addEventListener('DOMContentLoaded', () => {
   const installBtn = document.getElementById('pwa-install-btn');
-  
-  // Check if already in standalone mode (installed)
+  if (!installBtn) return;
+
   if (window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true) {
-    if (installBtn) {
-      installBtn.innerHTML = '✓ Ya instalada';
-      installBtn.disabled = true;
-      installBtn.classList.add('opacity-50', 'cursor-not-allowed');
-    }
-  } else if (installBtn && !installable) {
+    installBtn.style.display = 'none';
+  } else if (!installable) {
     // Not installed and no install prompt available yet
     installBtn.innerHTML = '💾 Instalar aplicación';
   }

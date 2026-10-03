@@ -4,101 +4,24 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="description" content="Agenda del Festival de Sitges 2025">
+  <meta name="description" content="Agenda del Festival de Sitges 2026">
   <meta name="theme-color" content="#FF0042">
-  <title>Festival de Sitges 2025</title>
+  <title>Festival de Sitges 2026</title>
 
   <!-- PWA -->
   <link rel="manifest" href="manifest.json">
   <link rel="apple-touch-icon" href="Sitges_Film_Festival.png">
   <link rel="icon" type="image/png" href="Sitges_Film_Festival.png">
 
-  <!-- Tailwind CSS -->
-  <script src="https://cdn.tailwindcss.com"></script>
-  <script>
-    tailwind.config = {
-      theme: {
-        extend: {
-          colors: {
-            'sitges-red': '#FF0042',
-            'sitges-blue': '#6A5ACD',
-            'sitges-pink': '#D63384',
-          }
-        }
-      }
-    }
-  </script>
-
-  <style>
-    .line-clamp-2 {
-      display: -webkit-box;
-      -webkit-line-clamp: 2;
-      line-clamp: 2;
-      -webkit-box-orient: vertical;
-      overflow: hidden;
-    }
-
-    .line-clamp-3 {
-      display: -webkit-box;
-      -webkit-line-clamp: 3;
-      line-clamp: 3;
-      -webkit-box-orient: vertical;
-      overflow: hidden;
-    }
-
-    .movie-card {
-      transition: box-shadow 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-    }
-
-    .movie-card.expanded {
-      box-shadow: 0 20px 25px -5px rgba(127, 29, 29, 0.3), 0 10px 10px -5px rgba(127, 29, 29, 0.2);
-    }
-
-    .tag-badge {
-      backdrop-filter: blur(8px);
-    }
-
-    .filter-enter {
-      animation: slideDown 0.3s ease;
-    }
-
-    @keyframes slideDown {
-      from {
-        opacity: 0;
-        transform: translateY(-10px);
-      }
-
-      to {
-        opacity: 1;
-        transform: translateY(0);
-      }
-    }
-
-    /* Custom scrollbar */
-    ::-webkit-scrollbar {
-      width: 8px;
-    }
-
-    ::-webkit-scrollbar-track {
-      background: rgba(0, 0, 0, 0.3);
-    }
-
-    ::-webkit-scrollbar-thumb {
-      background: rgba(255, 0, 66, 0.5);
-      border-radius: 4px;
-    }
-
-    ::-webkit-scrollbar-thumb:hover {
-      background: rgba(255, 0, 66, 0.7);
-    }
-
-    .gradient-text {
-      background: linear-gradient(135deg, #FF0042 0%, #D63384 50%, #6A5ACD 100%);
-      -webkit-background-clip: text;
-      -webkit-text-fill-color: transparent;
-      background-clip: text;
-    }
-  </style>
+  <!-- Styles: a local, pre-built stylesheet instead of the Tailwind CDN
+       script. The CDN script generated these same utility classes at
+       runtime by scanning the DOM, but it was also listed in the Service
+       Worker's install-time cache.addAll() — and since that call is
+       all-or-nothing, any hiccup fetching that external script meant the
+       ENTIRE offline cache silently failed to install, including
+       index.html/app.js/movies.json. Serving the CSS as a same-origin file
+       removes that single point of failure for "sin internet" to work. -->
+  <link rel="stylesheet" href="styles.css">
 </head>
 
 <body class="min-h-screen bg-gray-950 text-white">
@@ -108,36 +31,28 @@
     <div class="max-w-4xl mx-auto px-4 py-5">
       <h1
         class="text-3xl font-black text-center bg-gradient-to-r from-sitges-red via-sitges-pink to-sitges-blue bg-clip-text text-transparent drop-shadow-lg">
-        🎬 Festival Sitges 2025
+        🎬 Festival Sitges <span id="header-year">2026</span>
       </h1>
       <p id="movie-count" class="text-center text-sm text-gray-400 mt-2 font-medium"></p>
     </div>
 
-    <!-- Filter Toggle -->
-    <button id="filter-toggle"
-      class="w-full py-3 flex items-center justify-center gap-2 text-sm font-semibold text-sitges-red transition-all border-t border-sitges-red/30">
-      <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none"
-        stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-        <polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"></polygon>
-      </svg>
-      Filtro <span id="filter-arrow">▼</span>
-    </button>
-
-    <!-- Filters -->
-    <div id="filters"
-      class="hidden px-4 pb-4 pt-3 space-y-4 bg-gradient-to-b from-black/50 to-transparent border-t border-sitges-red/20">
-      <div>
-        <label class="block text-xs font-bold text-sitges-red uppercase tracking-wider mb-2">Día</label>
-        <select id="day-filter"
-          class="w-full bg-gray-900 border-2 border-sitges-red/50 rounded-lg px-4 py-2.5 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-sitges-red focus:border-transparent transition-all">
-          <option value="all">Todos los días</option>
-        </select>
-      </div>
-    </div>
+    <!-- Now / Next banner: what's on and what's coming up, live -->
+    <div id="now-next-banner"
+      class="hidden max-w-4xl mx-auto px-4 py-3 mb-1 bg-black/60 border-t border-sitges-red/20"></div>
   </div>
 
-  <!-- Sessions Container -->
-  <div id="sessions-container" class="max-w-4xl mx-auto px-4 py-6 space-y-8 pb-6"></div>
+  <!-- Sessions Container. The loading state below is plain HTML already in
+       the page (not injected by JS), so it shows instantly — including the
+       few seconds it can take to time out and fall back when there's no
+       connection. renderSessions() always clears this container before
+       drawing the real cards, so it disappears on its own once data is
+       ready; no extra JS needed to hide it. -->
+  <div id="sessions-container" class="max-w-4xl mx-auto px-4 py-6 space-y-8 pb-6">
+    <div class="flex flex-col items-center justify-center gap-4 py-20 text-gray-400">
+      <div class="spinner"></div>
+      <p class="text-sm">Cargando programación…</p>
+    </div>
+  </div>
 
   <!-- PWA Install Button (Bottom - Always Visible) -->
   <div class="max-w-4xl mx-auto px-4 pb-6">
@@ -147,38 +62,40 @@
     </button>
   </div>
 
+  <!-- Year switcher — filled in by app.js (renderYearSwitcher), always the
+       very last thing on the page. -->
+  <div id="year-switcher" class="max-w-4xl mx-auto px-4 pb-10 flex flex-col items-center"></div>
+
   <script src="app.js"></script>
   <script>
     // Service Worker Registration with mobile alerts
     if ('serviceWorker' in navigator) {
+      debug('SW: controller at load', { hasController: !!navigator.serviceWorker.controller });
       navigator.serviceWorker.register('sw.js')
         .then(reg => {
-          console.log('Service Worker registered');
+          debug('SW: registered', { scope: reg.scope, active: !!reg.active, waiting: !!reg.waiting, installing: !!reg.installing });
 
           // Check for updates
           reg.addEventListener('updatefound', () => {
             const newWorker = reg.installing;
-            console.log('Service Worker update found');
+            debug('SW: update found');
 
             newWorker.addEventListener('statechange', () => {
-              if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
-                console.log('New Service Worker installed, reload to activate');
-                // Optionally reload the page to activate new service worker
-                // window.location.reload();
-              }
+              debug('SW: new worker state', newWorker.state);
             });
           });
         })
         .catch(err => {
-          console.error('Service Worker registration failed:', err);
+          debug('SW: registration FAILED', String(err));
           alert('⚠️ Error al registrar Service Worker:\n' + err.message);
         });
 
       // Handle controller change
       navigator.serviceWorker.addEventListener('controllerchange', () => {
-        console.log('Service Worker controller changed');
+        debug('SW: controller changed');
       });
     } else {
+      debug('SW: not supported by this browser');
       alert('⚠️ Tu navegador no soporta Service Workers. La app no funcionará offline.');
     }
 

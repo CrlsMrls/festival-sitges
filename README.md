@@ -1,83 +1,90 @@
-# Festival de Sitges 2025 - Agenda
+# Festival de Sitges 2026 - Agenda
 
-Una agenda personalizada y compacta para el Festival de Sitges
+Una agenda personalizada y compacta para el Festival de Sitges, con las 14 sesiones
+compradas para la edición de 2026.
 
-Imágenes de iconos y colores de marca en https://brandfetch.com/sitgesfilmfestival.com 
+Imágenes de iconos y colores de marca en https://brandfetch.com/sitgesfilmfestival.com
 
- `index.html` usa Tailwind CSS y Vanilla JS. No es necesario ningún build step (no existe package.json).
- 
-Para que el PWA funcione, se necesita un servidor que use HTTPS (o `localhost`). 
+`index.html` usa Tailwind CSS y Vanilla JS. No es necesario ningún build step (no existe package.json).
 
-Año 2025 - https://sitges-2025.netlify.app/
+Para que el PWA funcione, se necesita un servidor que use HTTPS (o `localhost`).
 
+## Novedades respecto a la edición 2025
 
-## Datos de las películas
+- Cada sesión incluye ahora `date` (fecha ISO), lo que permite calcular en tiempo real
+  qué película toca **ahora** y cuál es la **siguiente**, con un banner fijo arriba y
+  la tarjeta correspondiente resaltada. Se actualiza solo cada 30s mientras la app
+  está abierta. Si una edición no tiene `date` (como 2025, que solo tenía `day`), la
+  app simplemente no muestra "ahora/siguiente" para esa edición — no rompe nada.
+- Al abrir la app, hace scroll automático a la sesión en curso o a la siguiente.
+- Los pósters se sirven directamente desde Sitges (no hace falta el script de IMDb
+  para esta edición) y el Service Worker los cachea para verlos sin conexión.
+- Las tarjetas sin ficha en IMDb (títulos muy nuevos) ya no muestran un enlace roto.
+- **Varias ediciones en la misma app**: selector al final de la página ("Ver otra
+  edición") para cambiar entre años sin salir de la app — ver `AVAILABLE_YEARS` en
+  `app.js`. Ya no hay filtro por día (no aportaba mucho con pocas sesiones).
+- Si la app ya está instalada en la pantalla de inicio, el botón de instalar se
+  oculta directamente en vez de mostrarse deshabilitado.
+- Robustez offline: timeout de 4s si la red se queda colgada en vez de fallar rápido,
+  respaldo en `localStorage` independiente del Service Worker (más fiable en iOS), y
+  un panel de diagnóstico que solo aparece en pantalla si de verdad no hay datos que
+  mostrar (nunca en el camino feliz).
 
-Para el año 2025, las películas están en el archivo `2025/movies.json`. 
+## Datos de las sesiones
 
-Para cada año nuevo:
-1. Duplicar esta carpeta `2025/` y renombrarla a `2026/`
-2. Actualizar `movies.json` con las nuevas películas del festival 2026
-3. En `app.js` (raíz del proyecto), cambiar la línea:
-   ```javascript
-   const response = await fetch('./2025/movies.json');
-   ```
-   por:
-   ```javascript
-   const response = await fetch('./2026/movies.json');
-   ```
+Las sesiones de cada edición están en su propia carpeta, p.ej. `2026/movies.json`.
+Ver `2026/README.md` para el detalle de cada campo.
 
+Para añadir una nueva edición futura:
+1. Duplicar la carpeta `2026/` y renombrarla al año correspondiente.
+2. Actualizar `movies.json` con las nuevas sesiones (incluyendo `date` en formato
+   ISO, p.ej. `"2027-10-08"`, para tener el banner de ahora/siguiente).
+3. Añadir el año a `AVAILABLE_YEARS` en `app.js` (al principio del archivo) y, si es
+   la edición activa, poner ese año como primer elemento y actualizar la línea de
+   `currentYear`.
+4. Añadir la ruta `/AAAA/movies.json` a `urlsToCache` en `sw.js` para que se cachee
+   offline desde la instalación.
+5. Actualizar `manifest.json`, el `<title>` de `index.html` y `CACHE_NAME` en `sw.js`.
 
-### Estructura de cada película:
+### Estructura de cada sesión:
 
 ```json
 {
   "id": "unique-id",
-  "day": "Mar 14",
+  "day": "Vie 9",
+  "date": "2026-10-09",
   "start": "13:30",
-  "sala": "Auditori",
+  "sala": "Sala Auditori Meliá",
   "title": "Título de la película",
   "imdbScore": 7.0,
   "sitgesDuration": 95,
-  "tag": "Presencia / Premio",
+  "tag": "Presencia",
   "sitgesURL": "https://...",
-  "imdbURL": "https://...",
+  "imdbURL": "https://... (o \"\" si no tiene ficha)",
   "posterURL": "https://...",
-  "description": "Descripción completa...",
-  "audience": "Nota personal opcional",
-  "presences": ["Director", "Actor"],
-  "awards": ["Premio específico"]
+  "description": "Sinopsis completa...",
+  "audience": "Nota / resumen en una frase",
+  "presences": ["Equipo confirmado (Sitges)"],
+  "awards": []
 }
 ```
 
-## Obtener los pósters de las películas
+## Obtener los pósters de las películas (opcional)
 
-Para obtener automáticamente los pósters desde IMDb:
+Este año los pósters vienen directamente del propio Sitges. Si alguna vez hace
+falta volver a tirar de IMDb (por ejemplo si Sitges retira una imagen):
 
 1. Asegúrate de tener las URLs de IMDb en el archivo `movies.json`
 2. Edita `fetch-posters-node.js` y cambia el año si es necesario:
    ```javascript
-   const YEAR = '2025'; // Cambiar a '2026' para el próximo año
+   const YEAR = '2026';
    ```
 3. Ejecuta el script desde la terminal:
    ```bash
    node fetch-posters-node.js
    ```
-
-## Obtener pósters automáticamente
-
-Si necesitas actualizar o añadir pósters a las películas:
-
-1. Asegúrate de que cada película tenga su `imdbURL` correctamente configurado
-2. Ve a la raíz del proyecto y edita `fetch-posters-node.js`:
-   ```javascript
-   const YEAR = '2025'; // Asegúrate de que apunta a este año
-   ```
-3. Ejecuta el script desde la terminal: `node fetch-posters-node.js`
-4. El script actualizará automáticamente este archivo `movies.json` con los pósters encontrados.
-   - Lee todas las películas del archivo `YEAR/movies.json`
-   - Obtiene el póster de cada película desde IMDb
-   - Actualiza automáticamente el archivo JSON con las URLs de los pósters
-   - Muestra un resumen de los resultados en la consola
+   - Lee todas las películas de `YEAR/movies.json`
+   - Obtiene el póster de cada película desde IMDb (vía `og:image`)
+   - Actualiza automáticamente `movies.json` con las URLs encontradas
 
 **Nota:** El script añade un pequeño delay entre peticiones para no sobrecargar IMDb.
